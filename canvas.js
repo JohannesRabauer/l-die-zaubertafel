@@ -25,11 +25,13 @@
   }
 
   function resize() {
-    const w = canvas.clientWidth;
-    const h = canvas.clientHeight;
+    const w = canvas.clientWidth || canvas.parentElement.clientWidth || 300;
+    const h = canvas.clientHeight || 300;
+    if (w === 0 || h === 0) return;
+
     const temp = document.createElement('canvas');
-    temp.width = buffer.width;
-    temp.height = buffer.height;
+    temp.width = buffer.width || 1;
+    temp.height = buffer.height || 1;
     temp.getContext('2d').drawImage(buffer, 0, 0);
 
     canvas.width = w;
@@ -39,7 +41,7 @@
 
     bufCtx.fillStyle = BG;
     bufCtx.fillRect(0, 0, w, h);
-    if (temp.width && temp.height) bufCtx.drawImage(temp, 0, 0);
+    if (temp.width > 1 && temp.height > 1) bufCtx.drawImage(temp, 0, 0);
 
     ctx.drawImage(buffer, 0, 0);
   }

@@ -133,8 +133,8 @@ body {
 #tafel-canvas {
     display: block;
     width: 100%;
+    height: 350px;
     max-width: 800px;
-    min-height: 300px;
     background: #2d5a27;
     border: 12px solid #8B4513;
     border-radius: 4px;
@@ -278,5 +278,5 @@ body {
     body { padding: 2rem; }
     .chalk-title { font-size: 3.5rem; }
     #task-display { font-size: 3rem; }
-    #tafel-canvas { min-height: 400px; }
+    #tafel-canvas { height: 450px; }
 }

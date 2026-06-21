@@ -9,15 +9,15 @@ document.addEventListener('DOMContentLoaded', () => {
   const answerSection = $('answer-section'), colorButtons = $('color-buttons');
 
   let state = { grade: null, mode: null, score: 0, tasksCompleted: 0, currentTask: null, timeLeft: 0, timerInterval: null, attempts: 0 };
+  let tafelReady = false;
 
-  Tafel.init('tafel-canvas');
   loadSettings();
 
   // Grade selection
   document.querySelectorAll('.grade-btn').forEach(btn => btn.addEventListener('click', () => {
     document.querySelectorAll('.grade-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
-    state.grade = parseInt(btn.dataset.grade) || 0;
+    state.grade = parseInt(btn.dataset.grade);
     freeConfig.classList.toggle('hidden', btn.dataset.grade !== '0');
   }));
 
@@ -34,6 +34,12 @@ document.addEventListener('DOMContentLoaded', () => {
     saveSettings();
     startScreen.classList.add('hidden');
     gameScreen.classList.remove('hidden');
+    if (!tafelReady) {
+      Tafel.init('tafel-canvas');
+      tafelReady = true;
+    } else {
+      Tafel.resize();
+    }
     startGame();
   });
 
@@ -52,7 +58,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('tool-clear').addEventListener('click', () => Tafel.clear(true));
   document.querySelectorAll('.color-btn').forEach(btn => btn.addEventListener('click', () => Tafel.setColor(btn.dataset.color)));
 
-  window.addEventListener('resize', () => Tafel.resize());
+  window.addEventListener('resize', () => { if (tafelReady) Tafel.resize(); });
 
   function setActiveTool(id) {
     document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
