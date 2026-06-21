@@ -1,17 +1,17 @@
 (function () {
-  // Simple digit recognition using zone density features
-  // Divides bounding box of drawing into a 5x5 grid, computes fill density per cell
-  // Compares against reference templates for digits 0-9 and operators
+  const BG_R = 45, BG_G = 90, BG_B = 39;
+  let templates = null;
 
-  const BG_R = 45, BG_G = 90, BG_B = 39; // #2d5a27
+  function isBg(r, g, b) {
+    return Math.abs(r - BG_R) < 45 && Math.abs(g - BG_G) < 45 && Math.abs(b - BG_B) < 45;
+  }
 
-  function getDrawingBounds(imageData, w, h) {
-    let minX = w, minY = h, maxX = 0, maxY = 0;
-    let found = false;
+  function getBounds(data, w, h) {
+    let minX = w, minY = h, maxX = 0, maxY = 0, found = false;
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
         const i = (y * w + x) * 4;
-        if (!isBg(imageData[i], imageData[i+1], imageData[i+2])) {
+        if (!isBg(data[i], data[i + 1], data[i + 2])) {
           if (x < minX) minX = x;
           if (x > maxX) maxX = x;
           if (y < minY) minY = y;
@@ -24,145 +24,254 @@
     return { minX, minY, maxX, maxY, w: maxX - minX + 1, h: maxY - minY + 1 };
   }
 
-  function isBg(r, g, b) {
-    return Math.abs(r - BG_R) < 40 && Math.abs(g - BG_G) < 40 && Math.abs(b - BG_B) < 40;
+  function toBinary28(data, fullW, bounds) {
+    const grid = new Uint8Array(28 * 28);
+    const S = 22;
+    const scale = Math.min(S / bounds.w, S / bounds.h);
+    const dw = Math.round(bounds.w * scale);
+    const dh = Math.round(bounds.h * scale);
+    const ox = Math.floor((28 - dw) / 2);
+    const oy = Math.floor((28 - dh) / 2);
+    for (let y = 0; y < dh; y++) {
+      for (let x = 0; x < dw; x++) {
+        const sx = Math.floor(bounds.minX + x / scale);
+        const sy = Math.floor(bounds.minY + y / scale);
+        const i = (sy * fullW + sx) * 4;
+        if (!isBg(data[i], data[i + 1], data[i + 2])) {
+          grid[(oy + y) * 28 + (ox + x)] = 1;
+        }
+      }
+    }
+    return dilate(grid);
   }
 
-  function getZoneFeatures(imageData, fullW, bounds, gridSize) {
-    const features = new Array(gridSize * gridSize).fill(0);
-    const cellW = bounds.w / gridSize;
-    const cellH = bounds.h / gridSize;
+  function dilate(grid) {
+    // Slight dilation to thicken thin strokes
+    const out = new Uint8Array(784);
+    for (let y = 0; y < 28; y++) {
+      for (let x = 0; x < 28; x++) {
+        if (grid[y * 28 + x]) {
+          out[y * 28 + x] = 1;
+          if (x > 0) out[y * 28 + x - 1] = 1;
+          if (x < 27) out[y * 28 + x + 1] = 1;
+          if (y > 0) out[(y - 1) * 28 + x] = 1;
+          if (y < 27) out[(y + 1) * 28 + x] = 1;
+        }
+      }
+    }
+    return out;
+  }
 
-    for (let gy = 0; gy < gridSize; gy++) {
-      for (let gx = 0; gx < gridSize; gx++) {
-        let count = 0, total = 0;
-        const startX = Math.floor(bounds.minX + gx * cellW);
-        const endX = Math.floor(bounds.minX + (gx + 1) * cellW);
-        const startY = Math.floor(bounds.minY + gy * cellH);
-        const endY = Math.floor(bounds.minY + (gy + 1) * cellH);
-
-        for (let y = startY; y < endY; y++) {
-          for (let x = startX; x < endX; x++) {
-            const i = (y * fullW + x) * 4;
-            total++;
-            if (!isBg(imageData[i], imageData[i+1], imageData[i+2])) count++;
+  function features(grid) {
+    const f = [];
+    // 4x4 zone densities (16 features)
+    for (let gy = 0; gy < 4; gy++) {
+      for (let gx = 0; gx < 4; gx++) {
+        let c = 0;
+        for (let dy = 0; dy < 7; dy++) {
+          for (let dx = 0; dx < 7; dx++) {
+            const y = gy * 7 + dy, x = gx * 7 + dx;
+            if (y < 28 && x < 28 && grid[y * 28 + x]) c++;
           }
         }
-        features[gy * gridSize + gx] = total > 0 ? count / total : 0;
+        f.push(c / 49);
       }
     }
-    return features;
+    // Horizontal crossing count per quarter (4)
+    for (let q = 0; q < 4; q++) {
+      let cr = 0;
+      for (let row = q * 7; row < (q + 1) * 7 && row < 28; row++) {
+        let prev = 0;
+        for (let x = 0; x < 28; x++) {
+          if (grid[row * 28 + x] && !prev) cr++;
+          prev = grid[row * 28 + x];
+        }
+      }
+      f.push(cr / 14);
+    }
+    // Vertical crossing per quarter (4)
+    for (let q = 0; q < 4; q++) {
+      let cr = 0;
+      for (let col = q * 7; col < (q + 1) * 7 && col < 28; col++) {
+        let prev = 0;
+        for (let y = 0; y < 28; y++) {
+          if (grid[y * 28 + col] && !prev) cr++;
+          prev = grid[y * 28 + col];
+        }
+      }
+      f.push(cr / 14);
+    }
+    // Center of mass (2)
+    let cx = 0, cy = 0, tot = 0;
+    for (let y = 0; y < 28; y++) for (let x = 0; x < 28; x++) {
+      if (grid[y * 28 + x]) { cx += x; cy += y; tot++; }
+    }
+    f.push(tot > 0 ? cx / tot / 28 : 0.5);
+    f.push(tot > 0 ? cy / tot / 28 : 0.5);
+    // Fill ratio
+    f.push(tot / 784);
+    return f; // 16+4+4+2+1 = 27 features
   }
 
-  // Reference templates (5x5 density grids) for digits 0-9
-  // Generated from typical handwriting patterns
-  const GRID = 5;
-  const TEMPLATES = {
-    '0': [0,.6,1,.6,0, .8,0,0,0,.8, .8,0,0,0,.8, .8,0,0,0,.8, 0,.6,1,.6,0],
-    '1': [0,0,.6,.2,0, 0,.6,1,0,0, 0,0,1,0,0, 0,0,1,0,0, 0,.4,1,.4,0],
-    '2': [0,.6,1,.6,0, .6,0,0,.2,.8, 0,0,.4,.8,0, 0,.6,.8,0,0, .8,1,1,1,.8],
-    '3': [.4,.8,1,.6,0, 0,0,0,.2,.8, 0,.4,1,.6,0, 0,0,0,.2,.8, .4,.8,1,.6,0],
-    '4': [0,0,0,.8,.2, 0,0,.6,.8,0, 0,.6,.2,.8,0, .8,1,1,1,.8, 0,0,0,.8,0],
-    '5': [.8,1,1,1,.6, .8,0,0,0,0, .8,1,1,.6,0, 0,0,0,.2,.8, .8,1,1,.6,0],
-    '6': [0,.4,1,.6,0, .6,.2,0,0,0, .8,.8,1,.6,0, .8,0,0,.2,.8, 0,.4,1,.6,0],
-    '7': [.8,1,1,1,.8, 0,0,0,.6,.4, 0,0,.6,.2,0, 0,.6,0,0,0, .6,.2,0,0,0],
-    '8': [0,.6,1,.6,0, .6,0,0,0,.6, 0,.6,1,.6,0, .6,0,0,0,.6, 0,.6,1,.6,0],
-    '9': [0,.6,1,.4,0, .8,.2,0,0,.8, 0,.6,1,.8,.8, 0,0,0,.4,.6, 0,.6,1,.4,0],
-  };
+  // Generate templates by rendering digits with different fonts/styles
+  function generateTemplates() {
+    const c = document.createElement('canvas');
+    c.width = 60; c.height = 80;
+    const ctx = c.getContext('2d');
+    const tpls = {};
+    const fonts = ['sans-serif', 'serif', 'monospace'];
+    const styles = ['normal', 'italic'];
+    const sizes = [52, 58, 48];
 
-  function matchTemplate(features) {
-    let bestDigit = null, bestScore = -Infinity;
-    for (const [digit, template] of Object.entries(TEMPLATES)) {
-      let score = 0;
-      for (let i = 0; i < features.length; i++) {
-        // Cosine-like similarity
-        score += features[i] * template[i];
-        score -= Math.abs(features[i] - template[i]) * 0.3;
-      }
-      if (score > bestScore) {
-        bestScore = score;
-        bestDigit = digit;
+    for (let d = 0; d <= 9; d++) {
+      tpls[d] = [];
+      for (const font of fonts) {
+        for (const style of styles) {
+          for (const size of sizes) {
+            ctx.fillStyle = `rgb(${BG_R},${BG_G},${BG_B})`;
+            ctx.fillRect(0, 0, 60, 80);
+            ctx.fillStyle = '#ffffff';
+            ctx.font = `${style} ${size}px ${font}`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(String(d), 30, 42);
+
+            const imgData = ctx.getImageData(0, 0, 60, 80).data;
+            const bounds = getBoundsGeneric(imgData, 60, 80);
+            if (!bounds) continue;
+            const grid = toBinary28Generic(imgData, 60, bounds);
+            tpls[d].push(features(dilate(grid)));
+          }
+        }
       }
     }
-    return { digit: bestDigit, confidence: bestScore };
+    return tpls;
   }
 
-  function segmentDigits(imageData, fullW, fullH) {
-    // Find vertical gaps to segment multiple digits
-    const bounds = getDrawingBounds(imageData, fullW, fullH);
+  function getBoundsGeneric(data, w, h) {
+    let minX = w, minY = h, maxX = 0, maxY = 0, found = false;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4;
+        if (data[i] > 128 || data[i + 1] > 128 || data[i + 2] > 128) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+          found = true;
+        }
+      }
+    }
+    if (!found) return null;
+    return { minX, minY, maxX, maxY, w: maxX - minX + 1, h: maxY - minY + 1 };
+  }
+
+  function toBinary28Generic(data, fullW, bounds) {
+    const grid = new Uint8Array(784);
+    const S = 22;
+    const scale = Math.min(S / bounds.w, S / bounds.h);
+    const dw = Math.round(bounds.w * scale);
+    const dh = Math.round(bounds.h * scale);
+    const ox = Math.floor((28 - dw) / 2);
+    const oy = Math.floor((28 - dh) / 2);
+    for (let y = 0; y < dh; y++) {
+      for (let x = 0; x < dw; x++) {
+        const sx = Math.floor(bounds.minX + x / scale);
+        const sy = Math.floor(bounds.minY + y / scale);
+        const i = (sy * fullW + sx) * 4;
+        if (data[i] > 128 || data[i + 1] > 128 || data[i + 2] > 128) {
+          grid[(oy + y) * 28 + (ox + x)] = 1;
+        }
+      }
+    }
+    return grid;
+  }
+
+  function ensureTemplates() {
+    if (!templates) templates = generateTemplates();
+  }
+
+  function matchDigit(feat) {
+    let best = '0', bestDist = Infinity;
+    for (const [digit, samples] of Object.entries(templates)) {
+      for (const tpl of samples) {
+        let dist = 0;
+        for (let i = 0; i < feat.length; i++) {
+          const d = feat[i] - tpl[i];
+          dist += d * d;
+        }
+        if (dist < bestDist) { bestDist = dist; best = digit; }
+      }
+    }
+    return { digit: best, dist: bestDist };
+  }
+
+  function segmentDigits(data, fullW, fullH) {
+    const bounds = getBounds(data, fullW, fullH);
     if (!bounds) return [];
 
-    // Compute column density within bounds
-    const colDensity = [];
+    const cols = [];
     for (let x = bounds.minX; x <= bounds.maxX; x++) {
-      let count = 0;
+      let c = 0;
       for (let y = bounds.minY; y <= bounds.maxY; y++) {
         const i = (y * fullW + x) * 4;
-        if (!isBg(imageData[i], imageData[i+1], imageData[i+2])) count++;
+        if (!isBg(data[i], data[i + 1], data[i + 2])) c++;
       }
-      colDensity.push(count);
+      cols.push(c);
     }
 
-    // Find segments by looking for gaps (columns with 0 or near-0 ink)
-    const threshold = bounds.h * 0.05;
-    const segments = [];
-    let inSegment = false, segStart = 0;
+    const gapThresh = bounds.h * 0.03;
+    const minGap = Math.max(4, bounds.w * 0.04);
+    const segs = [];
+    let inSeg = false, start = 0, gap = 0;
 
-    for (let i = 0; i < colDensity.length; i++) {
-      if (!inSegment && colDensity[i] > threshold) {
-        inSegment = true;
-        segStart = i;
-      } else if (inSegment && colDensity[i] <= threshold) {
-        inSegment = false;
-        segments.push({ startX: bounds.minX + segStart, endX: bounds.minX + i - 1 });
+    for (let i = 0; i < cols.length; i++) {
+      if (cols[i] > gapThresh) {
+        if (!inSeg) { inSeg = true; start = i; }
+        gap = 0;
+      } else {
+        gap++;
+        if (inSeg && gap > minGap) {
+          segs.push({ s: start, e: i - gap });
+          inSeg = false;
+        }
       }
     }
-    if (inSegment) segments.push({ startX: bounds.minX + segStart, endX: bounds.maxX });
+    if (inSeg) segs.push({ s: start, e: cols.length - 1 });
+    if (!segs.length) return [bounds];
 
-    // If no clear segmentation, treat as single digit
-    if (segments.length === 0) return [bounds];
-
-    // Convert segments to bounds
-    return segments.map(seg => {
+    return segs.map(seg => {
+      const sx = bounds.minX + seg.s, ex = bounds.minX + seg.e;
       let minY = fullH, maxY = 0;
-      for (let x = seg.startX; x <= seg.endX; x++) {
+      for (let x = sx; x <= ex; x++) {
         for (let y = bounds.minY; y <= bounds.maxY; y++) {
           const i = (y * fullW + x) * 4;
-          if (!isBg(imageData[i], imageData[i+1], imageData[i+2])) {
+          if (!isBg(data[i], data[i + 1], data[i + 2])) {
             if (y < minY) minY = y;
             if (y > maxY) maxY = y;
           }
         }
       }
-      return { minX: seg.startX, maxX: seg.endX, minY, maxY, w: seg.endX - seg.startX + 1, h: maxY - minY + 1 };
-    }).filter(b => b.w > 5 && b.h > 5); // Filter tiny noise
-  }
-
-  function isLikelyMinus(bounds) {
-    // A minus sign is much wider than tall
-    return bounds.w > bounds.h * 2.5 && bounds.h < 20;
+      return { minX: sx, maxX: ex, minY, maxY, w: ex - sx + 1, h: maxY - minY + 1 };
+    }).filter(b => b.w > 3 && b.h > 3);
   }
 
   function recognize(canvasBuffer) {
     const w = canvasBuffer.width, h = canvasBuffer.height;
-    if (w === 0 || h === 0) return '';
-    const ctx = canvasBuffer.getContext('2d');
-    const imageData = ctx.getImageData(0, 0, w, h).data;
-
-    const segments = segmentDigits(imageData, w, h);
-    if (segments.length === 0) return '';
+    if (!w || !h) return '';
+    ensureTemplates();
+    const data = canvasBuffer.getContext('2d').getImageData(0, 0, w, h).data;
+    const segments = segmentDigits(data, w, h);
+    if (!segments.length) return '';
 
     let result = '';
     for (const seg of segments) {
-      if (isLikelyMinus(seg)) {
-        result += '-';
-        continue;
-      }
-      const features = getZoneFeatures(imageData, w, seg, GRID);
-      const match = matchTemplate(features);
-      if (match.confidence > 1.5) {
-        result += match.digit;
-      }
+      if (seg.w > seg.h * 2.5) { result += '-'; continue; }
+      if (seg.w < 8 && seg.h < 8) { result += '.'; continue; }
+      const grid = toBinary28(data, w, seg);
+      const feat = features(grid);
+      const m = matchDigit(feat);
+      result += m.digit;
     }
     return result;
   }
