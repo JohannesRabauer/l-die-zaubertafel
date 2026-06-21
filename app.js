@@ -7,6 +7,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const gradeLabel = $('grade-label'), taskDisplay = $('task-display');
   const answerInput = $('answer-input'), submitBtn = $('submit-btn');
   const answerSection = $('answer-section'), colorButtons = $('color-buttons');
+  const recognizeBtn = $('recognize-btn');
 
   let state = { grade: null, mode: null, score: 0, tasksCompleted: 0, currentTask: null, timeLeft: 0, timerInterval: null, attempts: 0 };
   let tafelReady = false;
@@ -34,6 +35,7 @@ document.addEventListener('DOMContentLoaded', () => {
     saveSettings();
     startScreen.classList.add('hidden');
     gameScreen.classList.remove('hidden');
+    document.body.classList.add('game-active');
     if (!tafelReady) {
       Tafel.init('tafel-canvas');
       tafelReady = true;
@@ -45,6 +47,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   backBtn.addEventListener('click', () => {
     stopTimer();
+    document.body.classList.remove('game-active');
     gameScreen.classList.add('hidden');
     startScreen.classList.remove('hidden');
     resetState();
@@ -52,6 +55,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
   submitBtn.addEventListener('click', checkAnswer);
   answerInput.addEventListener('keydown', e => { if (e.key === 'Enter') checkAnswer(); });
+
+  // Recognize button - read drawing from canvas
+  recognizeBtn.addEventListener('click', () => {
+    const buf = Tafel.getBuffer();
+    const result = Recognize.recognize(buf);
+    if (result) {
+      answerInput.value = result;
+    }
+  });
 
   $('tool-chalk').addEventListener('click', () => { setActiveTool('tool-chalk'); Tafel.setTool('chalk'); });
   $('tool-eraser').addEventListener('click', () => { setActiveTool('tool-eraser'); Tafel.setTool('eraser'); });
@@ -99,7 +111,7 @@ document.addEventListener('DOMContentLoaded', () => {
     state.currentTask = MathGen.generateTask(state.grade, options);
     taskDisplay.textContent = state.currentTask.question;
     answerInput.value = '';
-    answerInput.focus();
+    Tafel.clear(false);
   }
 
   function getFreeOptions() {
