@@ -14,21 +14,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
   loadSettings();
 
-  // Grade selection
-  document.querySelectorAll('.grade-btn').forEach(btn => btn.addEventListener('click', () => {
+  // Event delegation for grade and mode buttons (most compatible across devices)
+  document.querySelector('.grade-buttons').addEventListener('click', e => {
+    const btn = e.target.closest('.grade-btn');
+    if (!btn) return;
     document.querySelectorAll('.grade-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     state.grade = parseInt(btn.dataset.grade);
     freeConfig.classList.toggle('hidden', btn.dataset.grade !== '0');
-  }));
+  });
 
-  // Mode selection
-  document.querySelectorAll('.mode-btn').forEach(btn => btn.addEventListener('click', () => {
+  document.querySelector('.mode-buttons').addEventListener('click', e => {
+    const btn = e.target.closest('.mode-btn');
+    if (!btn) return;
     document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     state.mode = btn.dataset.mode;
     timeConfig.classList.toggle('hidden', state.mode !== 'zeit');
-  }));
+  });
 
   startBtn.addEventListener('click', () => {
     if (state.grade === null || !state.mode) return;
